@@ -453,6 +453,16 @@ openvpn_getaddrinfo(unsigned int flags,
                 (*res)->ai_addrlen = sizeof(struct sockaddr_un);
                 (*res)->ai_addr = malloc(sizeof(struct sockaddr_un));
                 ASSERT((*res)->ai_addr);
+
+                print_hostname = strchr(hostname, ':');
+                if (print_hostname)
+                {
+                    print_hostname = print_hostname + 1;
+                }
+                else
+                {
+                    print_hostname = hostname;
+                }
                 sockaddr_unix_init((struct sockaddr_un*)((*res)->ai_addr), hostname);
                 status = 0;
                 break;
