@@ -69,6 +69,7 @@ struct openvpn_sockaddr
         struct sockaddr sa;
         struct sockaddr_in in4;
         struct sockaddr_in6 in6;
+        struct sockaddr_un un;
     } addr;
 };
 
@@ -96,6 +97,9 @@ struct link_socket_actual
         struct in_addr in4;
 #endif
         struct in6_pktinfo in6;
+#ifdef UNIX_SOCK_SUPPORT
+        char unix_path[108];
+#endif
     } pi;
 #endif
 };
@@ -629,6 +633,10 @@ addr_defined(const struct openvpn_sockaddr *addr)
 
         case AF_INET6: return !IN6_IS_ADDR_UNSPECIFIED(&addr->addr.in6.sin6_addr);
 
+#ifdef UNIX_SOCK_SUPPORT
+        case AF_UNIX: return !!strlen(addr->addr.un.sun_path);
+#endif
+
         default: return 0;
     }
 }
@@ -697,6 +705,11 @@ addr_match(const struct openvpn_sockaddr *a1, const struct openvpn_sockaddr *a2)
 
         case AF_INET6:
             return IN6_ARE_ADDR_EQUAL(&a1->addr.in6.sin6_addr, &a2->addr.in6.sin6_addr);
+
+#ifdef UNIX_SOCK_SUPPORT
+        case AF_UNIX:
+            return strncmp(a1->addr.un.sun_path, a2->addr.un.sun_path, sizeof(a1->addr.un.sun_path)) == 0;
+#endif
     }
     ASSERT(0);
     return false;
@@ -723,6 +736,15 @@ addrlist_match(const struct openvpn_sockaddr *a1, const struct addrinfo *addrlis
                     return true;
                 }
                 break;
+
+#ifdef UNIX_SOCK_SUPPORT
+            case AF_UNIX:
+                if (strncmp(a1->addr.un.sun_path, ((struct sockaddr_un *)curele->ai_addr)->sun_path, sizeof(a1->addr.un.sun_path)) == 0)
+                {
+                    return true;
+                }
+                break;
+#endif
 
             default:
                 ASSERT(0);
@@ -773,6 +795,16 @@ addrlist_port_match(const struct openvpn_sockaddr *a1, const struct addrinfo *a2
                 }
                 break;
 
+#ifdef UNIX_SOCK_SUPPORT
+            case AF_UNIX:
+                if (curele->ai_family == AF_UNIX
+                    && strncmp(a1->addr.un.sun_path, ((struct sockaddr_un *) curele->ai_addr)->sun_path, sizeof(a1->addr.un.sun_path)) == 0)
+                {
+                    return true;
+                }
+                break;
+#endif
+
             default:
                 ASSERT(0);
         }
@@ -794,6 +826,12 @@ addr_port_match(const struct openvpn_sockaddr *a1, const struct openvpn_sockaddr
         case AF_INET6:
             return IN6_ARE_ADDR_EQUAL(&a1->addr.in6.sin6_addr, &a2->addr.in6.sin6_addr)
                    && a1->addr.in6.sin6_port == a2->addr.in6.sin6_port;
+
+#ifdef UNIX_SOCK_SUPPORT
+        case AF_UNIX:
+            return strncmp(a1->addr.un.sun_path, a2->addr.un.sun_path, sizeof(a1->addr.un.sun_path)) == 0;
+#endif
+
     }
     ASSERT(0);
     return false;
@@ -832,6 +870,12 @@ addr_zero_host(struct openvpn_sockaddr *addr)
         case AF_INET6:
             memset(&addr->addr.in6.sin6_addr, 0, sizeof(struct in6_addr));
             break;
+
+#ifdef UNIX_SOCK_SUPPORT
+        case AF_UNIX:
+            memset(addr->addr.un.sun_path, 0, sizeof(addr->addr.un.sun_path));
+#endif
+
     }
 }
 
@@ -857,6 +901,10 @@ af_addr_size(sa_family_t af)
         case AF_INET: return sizeof(struct sockaddr_in);
 
         case AF_INET6: return sizeof(struct sockaddr_in6);
+
+#ifdef UNIX_SOCK_SUPPORT
+        case AF_UNIX: return sizeof(struct sockaddr_un);
+#endif
 
         default:
 #if 0
@@ -934,6 +982,10 @@ link_socket_verify_incoming_addr(struct buffer *buf,
                 {
                     return false;
                 }
+#ifdef UNIX_SOCK_SUPPORT
+            // fall through
+            case AF_UNIX:
+#endif
                 if (info->remote_float || (!info->lsa->remote_list))
                 {
                     return true;
@@ -959,6 +1011,13 @@ link_socket_get_outgoing_addr(struct buffer *buf,
         {
             *act = &lsa->actual;
         }
+#ifdef UNIX_SOCK_SUPPORT
+        else if (lsa->actual.dest.addr.sa.sa_family == AF_UNIX)
+        {
+            // Unix domain socket could have an undefined remote
+            *act = &lsa->actual;
+        }
+#endif
         else
         {
             link_socket_bad_outgoing_addr();

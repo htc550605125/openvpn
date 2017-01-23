@@ -442,6 +442,22 @@ openvpn_getaddrinfo(unsigned int flags,
 #endif
             /* try hostname lookup */
             hints.ai_flags &= ~AI_NUMERICHOST;
+
+#ifdef UNIX_SOCK_SUPPORT
+            if (strcmp(servname, "unix") == 0)
+            {
+                *res = malloc(sizeof(struct addrinfo));
+                ASSERT(*res);
+                **res = hints;
+                (*res)->ai_family = AF_UNIX;
+                (*res)->ai_addrlen = sizeof(struct sockaddr_un);
+                (*res)->ai_addr = malloc(sizeof(struct sockaddr_un));
+                ASSERT((*res)->ai_addr);
+                sockaddr_unix_init((struct sockaddr_un*)((*res)->ai_addr), hostname);
+                status = 0;
+                break;
+            }
+#endif
             dmsg(D_SOCKET_DEBUG, "GETADDRINFO flags=0x%04x ai_family=%d ai_socktype=%d",
                  flags, hints.ai_family, hints.ai_socktype);
             status = getaddrinfo(hostname, servname, &hints, res);
@@ -1292,6 +1308,12 @@ socket_bind(socket_descriptor_t sd,
             msg(M_NONFATAL|M_ERRNO, "Setting IPV6_V6ONLY=%d failed", v6only);
         }
     }
+#ifdef UNIX_SOCK_SUPPORT
+    if (ai_family == AF_UNIX)
+    {
+        socket_delete_unix((struct sockaddr_un*)cur->ai_addr);
+    }
+#endif
     if (bind(sd, cur->ai_addr, cur->ai_addrlen))
     {
         const int errnum = openvpn_errno();
@@ -1423,6 +1445,13 @@ set_actual_address(struct link_socket_actual *actual, struct addrinfo *ai)
         actual->dest.addr.in6 =
             *((struct sockaddr_in6 *) ai->ai_addr);
     }
+#ifdef UNIX_SOCK_SUPPORT
+    else if (ai->ai_family == AF_UNIX)
+    {
+        actual->dest.addr.un =
+            *((struct sockaddr_un *) ai->ai_addr);
+    }
+#endif
     else
     {
         ASSERT(0);
@@ -1573,6 +1602,8 @@ resolve_bind_local(struct link_socket *sock, const sa_family_t af)
                 sock->local_host, sock->local_port,
                 gai_strerror(status));
         }
+
+        sock->info.af = sock->info.lsa->bind_local->ai_family;
     }
 
     gc_free(&gc);
@@ -2702,6 +2733,17 @@ print_sockaddr_ex(const struct sockaddr *sa,
             addr_is_defined = !IN6_IS_ADDR_UNSPECIFIED(&((struct sockaddr_in6 *) sa)->sin6_addr);
             break;
 
+#ifdef UNIX_SOCK_SUPPORT
+        case AF_UNIX:
+            if (!(flags & PS_DONT_SHOW_FAMILY))
+            {
+                buf_puts(&out, "[AF_UNIX]");
+            }
+            salen = sizeof(struct sockaddr_un);
+            addr_is_defined = !!strlen(((struct sockaddr_un *) sa)->sun_path);
+            break;
+#endif
+
         case AF_UNSPEC:
             if (!(flags & PS_DONT_SHOW_FAMILY))
             {
@@ -2719,11 +2761,23 @@ print_sockaddr_ex(const struct sockaddr *sa,
     status = getnameinfo(sa, salen, hostaddr, sizeof(hostaddr),
                          servname, sizeof(servname), NI_NUMERICHOST | NI_NUMERICSERV);
 
-    if (status!=0)
+#ifdef UNIX_SOCK_SUPPORT
+    if (status != 0 && sa->sa_family != AF_UNIX)
+#else
+    if (status != 0)
+#endif
     {
         buf_printf(&out,"[nameinfo() err: %s]",gai_strerror(status));
         return BSTR(&out);
     }
+
+#ifdef UNIX_SOCK_SUPPORT
+    if (status != 0 && sa->sa_family == AF_UNIX) {
+        hostaddr[0] = '[';
+        strncpynt(hostaddr + 1, ((struct sockaddr_un *) sa)->sun_path, sizeof(hostaddr) - 2);
+        strcat(hostaddr, "]");
+    }
+#endif
 
     if (!(flags & PS_DONT_SHOW_ADDR))
     {
@@ -3015,6 +3069,12 @@ static const struct proto_names proto_names[] = {
     {"tcp6-server","TCPv6_SERVER", AF_INET6, PROTO_TCP_SERVER},
     {"tcp6-client","TCPv6_CLIENT", AF_INET6, PROTO_TCP_CLIENT},
     {"tcp6","TCPv6", AF_INET6, PROTO_TCP},
+#ifdef UNIX_SOCK_SUPPORT
+    {"unix-dgram",  "UDP", AF_UNIX, PROTO_UDP},
+    {"unix-server", "TCP_SERVER", AF_UNIX, PROTO_TCP_SERVER},
+    {"unix-client", "TCP_CLIENT", AF_UNIX, PROTO_TCP_CLIENT},
+    {"unix",        "TCP", AF_UNIX, PROTO_TCP},
+#endif
 };
 
 bool
