@@ -692,6 +692,13 @@ addr_defined_ipi(const struct link_socket_actual *lsa)
 static inline bool
 link_socket_actual_defined(const struct link_socket_actual *act)
 {
+#ifdef UNIX_SOCK_SUPPORT
+    if (act && act->dest.addr.sa.sa_family == AF_UNIX)
+    {
+        // Unix domain socket could have undefined remote
+        return true;
+    }
+#endif
     return act && addr_defined(&act->dest);
 }
 
@@ -874,6 +881,7 @@ addr_zero_host(struct openvpn_sockaddr *addr)
 #ifdef UNIX_SOCK_SUPPORT
         case AF_UNIX:
             memset(addr->addr.un.sun_path, 0, sizeof(addr->addr.un.sun_path));
+            break;
 #endif
 
     }
